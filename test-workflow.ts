@@ -1,18 +1,39 @@
-#!/usr/bin/env node
+#!/usr/bin/env ts-node
 
 // Test script to demonstrate the shared memory MCP server with an agentic workflow
 // This simulates a coordinator + 4 workers scenario where token efficiency matters
 
-const { spawn } = require('child_process');
-const readline = require('readline');
+import { spawn, ChildProcess } from 'child_process';
+import * as readline from 'readline';
+
+interface MCPResponse {
+  jsonrpc: string;
+  id: number;
+  result?: {
+    content: { text: string }[];
+  };
+  error?: {
+    message: string;
+  };
+}
+
+interface MCPRequest {
+  jsonrpc: string;
+  id: number;
+  method: string;
+  params: {
+    name: string;
+    arguments: any;
+  };
+}
 
 class MCPTestClient {
-  constructor() {
-    this.requestId = 1;
-    this.server = null;
-  }
+  private requestId: number = 1;
+  private server: ChildProcess | null = null;
 
-  async start() {
+  constructor() {}
+
+  async start(): Promise<void> {
     console.log('🚀 Starting Shared Memory MCP Test Workflow\n');
     
     // Start the MCP server
@@ -20,17 +41,17 @@ class MCPTestClient {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    this.server.stderr.on('data', (data) => {
+    this.server.stderr!.on('data', (data: Buffer) => {
       console.log(`Server: ${data.toString().trim()}`);
     });
 
     // Wait a moment for server to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise<void>(resolve => setTimeout(resolve, 2000));
 
     await this.runAgenticWorkflow();
   }
 
-  async runAgenticWorkflow() {
+  async runAgenticWorkflow(): Promise<void> {
     console.log('📋 Step 1: Creating Agentic Session (Coordinator)');
     console.log('   - 1 Opus coordinator + 4 Sonnet workers');
     console.log('   - Shared context: Large codebase analysis task');
@@ -281,8 +302,8 @@ class MCPTestClient {
     console.log('   ✅ Token efficiency optimization');
   }
 
-  async callTool(name, args) {
-    const request = {
+  async callTool(name: string, args: any): Promise<MCPResponse['result']> {
+    const request: MCPRequest = {
       jsonrpc: '2.0',
       id: this.requestId++,
       method: 'tools/call',
@@ -292,19 +313,19 @@ class MCPTestClient {
       }
     };
 
-    return new Promise((resolve, reject) => {
-      this.server.stdin.write(JSON.stringify(request) + '\n');
+    return new Promise<MCPResponse['result']>((resolve, reject) => {
+      this.server!.stdin!.write(JSON.stringify(request) + '\n');
       
       const timeout = setTimeout(() => {
         reject(new Error(`Tool call timeout: ${name}`));
       }, 10000);
 
-      const handleData = (data) => {
+      const handleData = (data: Buffer) => {
         try {
-          const response = JSON.parse(data.toString());
+          const response: MCPResponse = JSON.parse(data.toString());
           if (response.id === request.id) {
             clearTimeout(timeout);
-            this.server.stdout.removeListener('data', handleData);
+            this.server!.stdout!.removeListener('data', handleData);
             if (response.error) {
               reject(new Error(response.error.message));
             } else {
@@ -316,11 +337,11 @@ class MCPTestClient {
         }
       };
 
-      this.server.stdout.on('data', handleData);
+      this.server!.stdout!.on('data', handleData);
     });
   }
 
-  cleanup() {
+  cleanup(): void {
     if (this.server) {
       this.server.kill();
     }
@@ -328,7 +349,7 @@ class MCPTestClient {
 }
 
 // Run the test
-async function main() {
+async function main(): Promise<void> {
   const client = new MCPTestClient();
   
   process.on('SIGINT', () => {
@@ -339,7 +360,7 @@ async function main() {
 
   try {
     await client.start();
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Test failed:', error.message);
     client.cleanup();
     process.exit(1);

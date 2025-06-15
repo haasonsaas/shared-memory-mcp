@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "ts-node test-workflow.ts",
+    "test-workflow": "ts-node test-workflow.ts"
   },
   "keywords": [],
   "author": "",
