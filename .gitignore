@@ -4,3 +4,4 @@ dist/
 .env
 .DS_Store
 *.tsbuildinfo
+claude-desktop-config.json

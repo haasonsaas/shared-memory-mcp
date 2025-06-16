@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "shared-memory": {
-      "command": "node",
-      "args": ["/Users/jonathanhaas/shared-memory-mcp/dist/server.js"],
-      "description": "Shared Memory MCP server for agentic teams - 6x token efficiency"
-    }
-  }
-}

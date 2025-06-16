@@ -188,18 +188,31 @@ request_detail("file_content", "auth.ts") // 500 tokens
 
 ## MCP Configuration
 
-Add to your Claude Desktop config:
+### For Claude Desktop
 
-```json
-{
-  "mcpServers": {
-    "shared-memory": {
-      "command": "node",
-      "args": ["/path/to/shared-memory-mcp/dist/server.js"]
-    }
-  }
-}
-```
+1. Copy the example configuration:
+   ```bash
+   cp claude-desktop-config.example.json claude-desktop-config.json
+   ```
+
+2. Edit `claude-desktop-config.json` and update the path to your installation:
+   ```json
+   {
+     "mcpServers": {
+       "shared-memory": {
+         "command": "node",
+         "args": ["/absolute/path/to/shared-memory-mcp/dist/server.js"]
+       }
+     }
+   }
+   ```
+
+3. Add this configuration to your Claude Desktop config file:
+   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+   - Linux: `~/.config/Claude/claude_desktop_config.json`
+
+Note: The `claude-desktop-config.json` file is gitignored as it contains machine-specific paths.
 
 ## Performance Benefits
 
