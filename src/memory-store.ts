@@ -20,6 +20,8 @@ export class SharedMemoryStore {
   private outputs = new Map<string, Record<string, OutputPublication>>();
   private dependencyWaiters = new Map<string, DependencyWaitRequest[]>();
   private dependencyResolvers = new Map<string, Array<(data: any) => void>>(); // key -> resolvers
+  // Performance optimization: Map work units by session_id -> unit_id for O(1) lookup
+  private workUnitIndex = new Map<string, Map<string, WorkUnit>>();
   
   readonly config: Required<SharedMemoryConfig>;
   private cleanupTimer?: NodeJS.Timeout;
@@ -57,6 +59,7 @@ export class SharedMemoryStore {
     this.discoveries.set(sessionId, []);
     this.outputs.set(sessionId, {});
     this.dependencyWaiters.set(sessionId, []);
+    this.workUnitIndex.set(sessionId, new Map());
 
     return sessionId;
   }
@@ -86,28 +89,33 @@ export class SharedMemoryStore {
 
   // Context Management with Compression
   private storeContext(fullContext: FullContext, sessionId: string): ContextRef {
-    const contextKey = this.generateId('context');
-    const compressed = this.compressContext(fullContext);
-    
-    this.contexts.set(contextKey, fullContext);
-    
-    // Track reference count for this context
-    if (!this.contextRefCount.has(contextKey)) {
-      this.contextRefCount.set(contextKey, new Set());
+    try {
+      const contextKey = this.generateId('context');
+      const compressed = this.compressContext(fullContext);
+      
+      this.contexts.set(contextKey, fullContext);
+      
+      // Track reference count for this context
+      if (!this.contextRefCount.has(contextKey)) {
+        this.contextRefCount.set(contextKey, new Set());
+      }
+      this.contextRefCount.get(contextKey)!.add(sessionId);
+      
+      const contextRef: ContextRef = {
+        ref_id: this.generateId('ref'),
+        summary: compressed.summary,
+        full_context_key: contextKey,
+        version: 1,
+        token_count: compressed.compressed_token_count,
+        created_at: Date.now()
+      };
+      
+      this.contextRefs.set(contextRef.ref_id, contextRef);
+      return contextRef;
+    } catch (error) {
+      console.error('Error storing context:', error);
+      throw new Error('Failed to store context: ' + (error as Error).message);
     }
-    this.contextRefCount.get(contextKey)!.add(sessionId);
-    
-    const contextRef: ContextRef = {
-      ref_id: this.generateId('ref'),
-      summary: compressed.summary,
-      full_context_key: contextKey,
-      version: 1,
-      token_count: compressed.compressed_token_count,
-      created_at: Date.now()
-    };
-    
-    this.contextRefs.set(contextRef.ref_id, contextRef);
-    return contextRef;
   }
 
   getFullContext(refId: string): FullContext | null {
@@ -162,61 +170,78 @@ export class SharedMemoryStore {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     
+    const sessionUnits = this.workUnitIndex.get(sessionId);
+    if (!sessionUnits) return false;
+    
     // Check for circular dependencies before adding
     const allUnits = [...session.work_units, ...units];
     if (this.hasCircularDependencies(allUnits)) {
       throw new Error('Circular dependencies detected in work units');
     }
     
-    session.work_units.push(...units);
+    // Add to both array and index
+    for (const unit of units) {
+      session.work_units.push(unit);
+      sessionUnits.set(unit.unit_id, unit);
+    }
+    
     session.updated_at = Date.now();
     this.sessions.set(sessionId, session);
     return true;
   }
   
   private hasCircularDependencies(units: WorkUnit[]): boolean {
-    // Build dependency graph
-    const graph = new Map<string, string[]>();
-    units.forEach(unit => {
-      graph.set(unit.unit_id, unit.dependencies || []);
-    });
-    
-    // Check for cycles using DFS
-    const visited = new Set<string>();
-    const recursionStack = new Set<string>();
-    
-    const hasCycle = (unitId: string): boolean => {
-      visited.add(unitId);
-      recursionStack.add(unitId);
+    try {
+      // Build dependency graph
+      const graph = new Map<string, string[]>();
+      units.forEach(unit => {
+        graph.set(unit.unit_id, unit.dependencies || []);
+      });
       
-      const dependencies = graph.get(unitId) || [];
-      for (const dep of dependencies) {
-        if (!visited.has(dep)) {
-          if (hasCycle(dep)) return true;
-        } else if (recursionStack.has(dep)) {
-          return true; // Found a cycle
+      // Check for cycles using DFS
+      const visited = new Set<string>();
+      const recursionStack = new Set<string>();
+      
+      const hasCycle = (unitId: string): boolean => {
+        visited.add(unitId);
+        recursionStack.add(unitId);
+        
+        const dependencies = graph.get(unitId) || [];
+        for (const dep of dependencies) {
+          if (!visited.has(dep)) {
+            if (hasCycle(dep)) return true;
+          } else if (recursionStack.has(dep)) {
+            return true; // Found a cycle
+          }
+        }
+        
+        recursionStack.delete(unitId);
+        return false;
+      };
+      
+      // Check each unit
+      for (const unit of units) {
+        if (!visited.has(unit.unit_id)) {
+          if (hasCycle(unit.unit_id)) return true;
         }
       }
       
-      recursionStack.delete(unitId);
       return false;
-    };
-    
-    // Check each unit
-    for (const unit of units) {
-      if (!visited.has(unit.unit_id)) {
-        if (hasCycle(unit.unit_id)) return true;
-      }
+    } catch (error) {
+      console.error('Error checking circular dependencies:', error);
+      // On error, assume there might be circular dependencies to be safe
+      return true;
     }
-    
-    return false;
   }
 
   claimWorkUnit(sessionId: string, unitId: string, workerId: string, estimatedDuration: number): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     
-    const unit = session.work_units.find(u => u.unit_id === unitId);
+    const sessionUnits = this.workUnitIndex.get(sessionId);
+    if (!sessionUnits) return false;
+    
+    const unit = sessionUnits.get(unitId);
     if (!unit || unit.status !== 'available') return false;
     
     unit.status = 'claimed';
@@ -233,16 +258,27 @@ export class SharedMemoryStore {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     
-    const unit = session.work_units.find(u => u.unit_id === unitId);
+    const sessionUnits = this.workUnitIndex.get(sessionId);
+    if (!sessionUnits) return false;
+    
+    const unit = sessionUnits.get(unitId);
     if (!unit) return false;
     
     unit.status = status;
     unit.updated_at = Date.now();
+    
+    // Track when work actually starts
+    if (status === 'in_progress' && !unit.started_at) {
+      unit.started_at = Date.now();
+    }
+    
     if (result !== undefined) {
       unit.result = result;
     }
-    if (status === 'completed' && unit.estimated_duration) {
-      unit.actual_duration = Date.now() - (unit.updated_at - (unit.estimated_duration * 1000));
+    
+    // Calculate actual duration when completed
+    if (status === 'completed' && unit.started_at) {
+      unit.actual_duration = Math.round((Date.now() - unit.started_at) / 1000); // in seconds
     }
     
     session.updated_at = Date.now();
@@ -253,6 +289,13 @@ export class SharedMemoryStore {
   // Discovery Management
   appendDiscovery(sessionId: string, workerId: string, discovery: Omit<Discovery, 'discovery_id' | 'session_id' | 'worker_id' | 'timestamp' | 'version'>): string {
     const sessionDiscoveries = this.discoveries.get(sessionId) || [];
+    
+    // Check if we're at the limit and need to remove old discoveries
+    if (sessionDiscoveries.length >= this.config.maxDiscoveriesPerSession) {
+      // Remove oldest 10% of discoveries to make room
+      const removeCount = Math.max(1, Math.floor(this.config.maxDiscoveriesPerSession * 0.1));
+      sessionDiscoveries.splice(0, removeCount);
+    }
     
     const discoveryRecord: Discovery = {
       discovery_id: this.generateId('discovery'),
@@ -323,31 +366,32 @@ export class SharedMemoryStore {
   }
 
   async awaitDependency(sessionId: string, dependencyKey: string, timeoutMs: number): Promise<any> {
-    const outputs = this.outputs.get(sessionId) || {};
-    const output = outputs[dependencyKey];
-    
-    // If already available, return immediately
-    if (output && output.data !== null) {
-      return output.data;
-    }
-    
-    // Add to waiters
-    const waiters = this.dependencyWaiters.get(sessionId) || [];
-    const waitRequest: DependencyWaitRequest = {
-      session_id: sessionId,
-      dependency_key: dependencyKey,
-      requesting_worker: 'unknown',
-      timeout_ms: timeoutMs,
-      created_at: Date.now()
-    };
-    waiters.push(waitRequest);
-    this.dependencyWaiters.set(sessionId, waiters);
-    
-    // Create resolver key
-    const resolverKey = `${sessionId}:${dependencyKey}`;
-    
-    // Return a promise that resolves when the dependency is available
-    return new Promise((resolve, reject) => {
+    try {
+      const outputs = this.outputs.get(sessionId) || {};
+      const output = outputs[dependencyKey];
+      
+      // If already available, return immediately
+      if (output && output.data !== null) {
+        return output.data;
+      }
+      
+      // Add to waiters
+      const waiters = this.dependencyWaiters.get(sessionId) || [];
+      const waitRequest: DependencyWaitRequest = {
+        session_id: sessionId,
+        dependency_key: dependencyKey,
+        requesting_worker: 'unknown',
+        timeout_ms: timeoutMs,
+        created_at: Date.now()
+      };
+      waiters.push(waitRequest);
+      this.dependencyWaiters.set(sessionId, waiters);
+      
+      // Create resolver key
+      const resolverKey = `${sessionId}:${dependencyKey}`;
+      
+      // Return a promise that resolves when the dependency is available
+      return new Promise((resolve, reject) => {
       // Add resolver to the map
       const resolvers = this.dependencyResolvers.get(resolverKey) || [];
       resolvers.push(resolve);
@@ -366,12 +410,26 @@ export class SharedMemoryStore {
             this.dependencyResolvers.set(resolverKey, currentResolvers);
           }
         }
+        
+        // Clean up wait request
+        const waitRequests = this.dependencyWaiters.get(sessionId) || [];
+        const updatedRequests = waitRequests.filter(req => req.dependency_key !== dependencyKey);
+        if (updatedRequests.length === 0) {
+          this.dependencyWaiters.delete(sessionId);
+        } else {
+          this.dependencyWaiters.set(sessionId, updatedRequests);
+        }
+        
         reject(new Error(`Timeout waiting for dependency: ${dependencyKey}`));
       }, timeoutMs);
       
       // Store timeout for cleanup
       (resolve as any).__timeoutId = timeoutId;
     });
+    } catch (error) {
+      console.error('Error in awaitDependency:', error);
+      throw error;
+    }
   }
 
   publishOutput(sessionId: string, outputKey: string, data: any): boolean {
@@ -414,6 +472,14 @@ export class SharedMemoryStore {
   private generateId(prefix: string): string {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
+  
+  private validateWorkerAccess(sessionId: string, workerId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    
+    // Check if worker is coordinator or one of the assigned workers
+    return session.coordinator_id === workerId || session.worker_ids.includes(workerId);
+  }
 
   private estimateTokens(text: string): number {
     // Rough approximation: 1 token ≈ 4 characters
@@ -434,6 +500,7 @@ export class SharedMemoryStore {
     this.discoveries.delete(sessionId);
     this.outputs.delete(sessionId);
     this.dependencyWaiters.delete(sessionId);
+    this.workUnitIndex.delete(sessionId);
     
     // Clean up any pending dependency resolvers
     this.dependencyResolvers.forEach((resolvers, key) => {
@@ -502,5 +569,16 @@ export class SharedMemoryStore {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = undefined;
     }
+    
+    // Clean up all pending dependency resolvers
+    for (const [resolverKey, resolvers] of this.dependencyResolvers.entries()) {
+      resolvers.forEach(resolve => {
+        const timeoutId = (resolve as any).__timeoutId;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      });
+    }
+    this.dependencyResolvers.clear();
   }
 }

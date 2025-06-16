@@ -302,9 +302,10 @@ class SharedMemoryMCPServer {
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
+      const { name, arguments: args = {} } = request.params;
 
       try {
+        // Type-safe argument passing using proper type assertion
         switch (name) {
           case 'create_agentic_session':
             return await this.createAgenticSession(args as unknown as ToolArgs.CreateSessionArgs);
@@ -374,14 +375,14 @@ class SharedMemoryMCPServer {
 
     const fullContext: FullContext = {
       task_description,
-      codebase_files: codebase_files.map((f: any) => ({
+      codebase_files: codebase_files.map(f => ({
         file_path: f.file_path,
         content_summary: f.content_summary,
         key_functions: f.key_functions || [],
         dependencies: f.dependencies || [],
         last_modified: Date.now()
       })),
-      requirements: requirements.map((r: any) => ({
+      requirements: requirements.map(r => ({
         requirement_id: r.requirement_id,
         description: r.description,
         priority: r.priority,
@@ -538,7 +539,7 @@ class SharedMemoryMCPServer {
     Validation.validateSessionId(session_id);
     Validation.validateWorkUnits(work_units, this.memoryStore.config);
     
-    const units: WorkUnit[] = work_units.map((u: any) => ({
+    const units: WorkUnit[] = work_units.map(u => ({
       unit_id: u.unit_id,
       type: u.type,
       description: u.description,
@@ -569,6 +570,13 @@ class SharedMemoryMCPServer {
 
   private async claimWorkUnit(args: ToolArgs.ClaimWorkUnitArgs) {
     const { session_id, unit_id, worker_id, estimated_duration_minutes } = args;
+    
+    // Validate worker belongs to session
+    const session = this.memoryStore.getSession(session_id);
+    if (!session) {
+      throw new McpError(ErrorCode.InvalidParams, `Session not found: ${session_id}`);
+    }
+    this.validateWorkerInSession(session, worker_id);
     
     const success = this.memoryStore.claimWorkUnit(
       session_id, 
@@ -619,6 +627,13 @@ class SharedMemoryMCPServer {
 
   private async addDiscovery(args: ToolArgs.AddDiscoveryArgs) {
     const { session_id, worker_id, discovery_type, data, affects_workers } = args;
+    
+    // Validate worker belongs to session
+    const session = this.memoryStore.getSession(session_id);
+    if (!session) {
+      throw new McpError(ErrorCode.InvalidParams, `Session not found: ${session_id}`);
+    }
+    this.validateWorkerInSession(session, worker_id);
     
     const discoveryId = this.memoryStore.appendDiscovery(session_id, worker_id, {
       type: discovery_type,

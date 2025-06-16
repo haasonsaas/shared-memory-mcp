@@ -29,6 +29,7 @@ export interface WorkUnit {
   claimed_by?: string;
   estimated_duration?: number;
   actual_duration?: number;
+  started_at?: number;
   dependencies: string[];
   priority: 'low' | 'medium' | 'high';
   result?: any;
