@@ -756,7 +756,25 @@ class SharedMemoryMCPServer {
     await this.server.connect(transport);
     console.error('Shared Memory MCP server running on stdio');
   }
+
+  destroy() {
+    this.memoryStore.destroy();
+  }
 }
 
 const server = new SharedMemoryMCPServer();
+
+// Add graceful shutdown handling
+process.on('SIGINT', () => {
+  console.error('Received SIGINT, shutting down gracefully...');
+  server.destroy();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.error('Received SIGTERM, shutting down gracefully...');
+  server.destroy();
+  process.exit(0);
+});
+
 server.run().catch(console.error);

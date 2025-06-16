@@ -536,16 +536,20 @@ export class SharedMemoryStore {
 
   private startCleanupTimer(): void {
     this.cleanupTimer = setInterval(() => {
-      const now = Date.now();
-      const expiredSessions: string[] = [];
-      
-      for (const [sessionId, session] of this.sessions.entries()) {
-        if (this.isExpired(session)) {
-          expiredSessions.push(sessionId);
+      try {
+        const now = Date.now();
+        const expiredSessions: string[] = [];
+        
+        for (const [sessionId, session] of this.sessions.entries()) {
+          if (this.isExpired(session)) {
+            expiredSessions.push(sessionId);
+          }
         }
+        
+        expiredSessions.forEach(sessionId => this.cleanupSession(sessionId));
+      } catch (error) {
+        console.error('Error during cleanup timer:', error);
       }
-      
-      expiredSessions.forEach(sessionId => this.cleanupSession(sessionId));
     }, this.config.cleanupIntervalMs);
   }
 
