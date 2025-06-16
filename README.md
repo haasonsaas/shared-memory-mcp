@@ -2,6 +2,12 @@
 
 **Solving coordination tax in agentic teams** - where Opus + 4 Sonnets burns 15x tokens but only gets 1.9x performance.
 
+## Prerequisites
+
+- Node.js 18+ 
+- npm or yarn
+- Claude Desktop (for MCP integration)
+
 ## The Problem
 
 Current agentic team patterns have terrible token efficiency:
@@ -34,20 +40,33 @@ This MCP server provides shared memory for agentic teams to achieve **6x token e
 - Delta updates since last version
 - Expansion on demand for specific sections
 
-## Quick Start
+## Installation
 
 ```bash
+# Clone the repository
+git clone https://github.com/haasonsaas/shared-memory-mcp.git
+cd shared-memory-mcp
+
 # Install dependencies
 npm install
 
 # Build the server
 npm run build
+```
 
+## Quick Start
+
+```bash
 # Run in development mode
 npm run dev
 
+# Or run the built server
+npm start
+
 # Test the agentic workflow
-node test-workflow.js
+npm test
+# or
+npm run test-workflow
 ```
 
 ## Usage Example
