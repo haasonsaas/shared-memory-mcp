@@ -104,7 +104,7 @@ class MCPTestClient {
       ]
     });
 
-    const session = JSON.parse(sessionResult.content[0].text);
+    const session = JSON.parse(sessionResult?.content[0]?.text || '{}');
     const sessionId = session.session_id;
     console.log(`✅ Session created: ${sessionId}\n`);
 
@@ -156,7 +156,7 @@ class MCPTestClient {
         worker_id: workerId
       });
       
-      const contextData = JSON.parse(context.content[0].text);
+      const contextData = JSON.parse(context?.content[0]?.text || '{}');
       console.log(`📥 Worker ${i} context (${contextData.worker_specific.context_summary.length} chars vs full context)`);
     }
     console.log();
@@ -230,7 +230,7 @@ class MCPTestClient {
       since_version: 0
     });
     
-    const delta = JSON.parse(deltaResult.content[0].text);
+    const delta = JSON.parse(deltaResult?.content[0]?.text || '{}');
     console.log(`📈 Worker 3 received ${delta.added_discoveries.length} new discoveries`);
     console.log(`   Token savings: ~90% vs full context retransmission`);
 
@@ -282,8 +282,8 @@ class MCPTestClient {
     console.log('🔧 Worker 3 claimed: API Optimization (dependency resolved)');
 
     console.log('\n📈 Step 8: Final Statistics');
-    const stats = await this.callTool('get_session_stats');
-    const statsData = JSON.parse(stats.content[0].text);
+    const stats = await this.callTool('get_session_stats', {});
+    const statsData = JSON.parse(stats?.content[0]?.text || '{}');
     
     console.log('🎉 Agentic Workflow Completed Successfully!');
     console.log('\n📊 Efficiency Gains:');

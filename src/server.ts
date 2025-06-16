@@ -17,12 +17,16 @@ import {
   WorkerContext,
   ContextDelta
 } from './types';
+import * as ToolArgs from './tool-types';
+import { SharedMemoryConfig, defaultConfig } from './config';
+import * as Validation from './validation';
 
 class SharedMemoryMCPServer {
   private server: Server;
   private memoryStore: SharedMemoryStore;
 
-  constructor() {
+  constructor(config?: SharedMemoryConfig) {
+    this.memoryStore = new SharedMemoryStore(config);
     this.server = new Server(
       {
         name: 'shared-memory-mcp',
@@ -35,8 +39,13 @@ class SharedMemoryMCPServer {
       }
     );
 
-    this.memoryStore = new SharedMemoryStore();
     this.setupHandlers();
+  }
+
+  private validateWorkerInSession(session: AgenticSession, workerId: string): void {
+    if (!session.worker_ids.includes(workerId) && workerId !== session.coordinator_id) {
+      throw new Validation.ValidationError(`Worker ${workerId} is not part of session ${session.session_id}`);
+    }
   }
 
   private setupHandlers() {
@@ -298,35 +307,35 @@ class SharedMemoryMCPServer {
       try {
         switch (name) {
           case 'create_agentic_session':
-            return await this.createAgenticSession(args);
+            return await this.createAgenticSession(args as unknown as ToolArgs.CreateSessionArgs);
           case 'get_session_info':
-            return await this.getSessionInfo(args);
+            return await this.getSessionInfo(args as unknown as ToolArgs.GetSessionInfoArgs);
           case 'update_session_status':
-            return await this.updateSessionStatus(args);
+            return await this.updateSessionStatus(args as unknown as ToolArgs.UpdateSessionStatusArgs);
           case 'get_worker_context':
-            return await this.getWorkerContext(args);
+            return await this.getWorkerContext(args as unknown as ToolArgs.GetWorkerContextArgs);
           case 'expand_context_section':
-            return await this.expandContextSection(args);
+            return await this.expandContextSection(args as unknown as ToolArgs.ExpandContextSectionArgs);
           case 'get_context_delta':
-            return await this.getContextDelta(args);
+            return await this.getContextDelta(args as unknown as ToolArgs.GetContextDeltaArgs);
           case 'publish_work_units':
-            return await this.publishWorkUnits(args);
+            return await this.publishWorkUnits(args as unknown as ToolArgs.PublishWorkUnitsArgs);
           case 'claim_work_unit':
-            return await this.claimWorkUnit(args);
+            return await this.claimWorkUnit(args as unknown as ToolArgs.ClaimWorkUnitArgs);
           case 'update_work_status':
-            return await this.updateWorkStatus(args);
+            return await this.updateWorkStatus(args as unknown as ToolArgs.UpdateWorkStatusArgs);
           case 'add_discovery':
-            return await this.addDiscovery(args);
+            return await this.addDiscovery(args as unknown as ToolArgs.AddDiscoveryArgs);
           case 'get_discoveries_since':
-            return await this.getDiscoveriesSince(args);
+            return await this.getDiscoveriesSince(args as unknown as ToolArgs.GetDiscoveriesSinceArgs);
           case 'declare_outputs':
-            return await this.declareOutputs(args);
+            return await this.declareOutputs(args as unknown as ToolArgs.DeclareOutputsArgs);
           case 'await_dependency':
-            return await this.awaitDependency(args);
+            return await this.awaitDependency(args as unknown as ToolArgs.AwaitDependencyArgs);
           case 'publish_output':
-            return await this.publishOutput(args);
+            return await this.publishOutput(args as unknown as ToolArgs.PublishOutputArgs);
           case 'get_session_stats':
-            return await this.getSessionStats(args);
+            return await this.getSessionStats((args || {}) as {});
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
@@ -340,7 +349,7 @@ class SharedMemoryMCPServer {
   }
 
   // Tool implementations
-  private async createAgenticSession(args: any) {
+  private async createAgenticSession(args: ToolArgs.CreateSessionArgs) {
     const { 
       coordinator_id, 
       worker_ids, 
@@ -350,6 +359,18 @@ class SharedMemoryMCPServer {
       constraints = [],
       ttl_minutes = 1440
     } = args;
+
+    // Validation
+    Validation.validateWorkerId(coordinator_id);
+    Validation.validateWorkerIds(worker_ids, this.memoryStore.config);
+    
+    if (!task_description || typeof task_description !== 'string' || task_description.trim() === '') {
+      throw new Validation.ValidationError('Task description is required and must be a non-empty string');
+    }
+    
+    if (ttl_minutes !== undefined) {
+      Validation.validatePositiveNumber(ttl_minutes, 'TTL minutes');
+    }
 
     const fullContext: FullContext = {
       task_description,
@@ -396,7 +417,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async getSessionInfo(args: any) {
+  private async getSessionInfo(args: ToolArgs.GetSessionInfoArgs) {
     const { session_id } = args;
     const session = this.memoryStore.getSession(session_id);
     
@@ -412,8 +433,13 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async updateSessionStatus(args: any) {
+  private async updateSessionStatus(args: ToolArgs.UpdateSessionStatusArgs) {
     const { session_id, status } = args;
+    
+    // Validation
+    Validation.validateSessionId(session_id);
+    Validation.validateSessionStatus(status);
+    
     const success = this.memoryStore.updateSessionStatus(session_id, status);
     
     if (!success) {
@@ -428,17 +454,20 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async getWorkerContext(args: any) {
+  private async getWorkerContext(args: ToolArgs.GetWorkerContextArgs) {
     const { session_id, worker_id, since_version } = args;
+    
+    // Validation
+    Validation.validateSessionId(session_id);
+    Validation.validateWorkerId(worker_id);
+    
     const session = this.memoryStore.getSession(session_id);
     
     if (!session) {
       throw new McpError(ErrorCode.InvalidParams, `Session not found: ${session_id}`);
     }
 
-    if (!session.worker_ids.includes(worker_id)) {
-      throw new McpError(ErrorCode.InvalidParams, `Worker not in session: ${worker_id}`);
-    }
+    this.validateWorkerInSession(session, worker_id);
 
     const context: WorkerContext = {
       shared_context_ref: session.shared_context.ref_id,
@@ -464,7 +493,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async expandContextSection(args: any) {
+  private async expandContextSection(args: ToolArgs.ExpandContextSectionArgs) {
     const { session_id, section } = args;
     const session = this.memoryStore.getSession(session_id);
     
@@ -486,7 +515,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async getContextDelta(args: any) {
+  private async getContextDelta(args: ToolArgs.GetContextDeltaArgs) {
     const { session_id, worker_id, since_version } = args;
     const delta = this.memoryStore.getContextDelta(session_id, worker_id, since_version);
     
@@ -502,8 +531,12 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async publishWorkUnits(args: any) {
+  private async publishWorkUnits(args: ToolArgs.PublishWorkUnitsArgs) {
     const { session_id, work_units } = args;
+    
+    // Validation
+    Validation.validateSessionId(session_id);
+    Validation.validateWorkUnits(work_units, this.memoryStore.config);
     
     const units: WorkUnit[] = work_units.map((u: any) => ({
       unit_id: u.unit_id,
@@ -534,7 +567,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async claimWorkUnit(args: any) {
+  private async claimWorkUnit(args: ToolArgs.ClaimWorkUnitArgs) {
     const { session_id, unit_id, worker_id, estimated_duration_minutes } = args;
     
     const success = this.memoryStore.claimWorkUnit(
@@ -562,7 +595,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async updateWorkStatus(args: any) {
+  private async updateWorkStatus(args: ToolArgs.UpdateWorkStatusArgs) {
     const { session_id, unit_id, status, result } = args;
     
     const success = this.memoryStore.updateWorkStatus(session_id, unit_id, status, result);
@@ -584,7 +617,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async addDiscovery(args: any) {
+  private async addDiscovery(args: ToolArgs.AddDiscoveryArgs) {
     const { session_id, worker_id, discovery_type, data, affects_workers } = args;
     
     const discoveryId = this.memoryStore.appendDiscovery(session_id, worker_id, {
@@ -607,7 +640,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async getDiscoveriesSince(args: any) {
+  private async getDiscoveriesSince(args: ToolArgs.GetDiscoveriesSinceArgs) {
     const { session_id, since_timestamp } = args;
     
     const discoveries = this.memoryStore.getDiscoveriesSince(session_id, since_timestamp);
@@ -624,7 +657,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async declareOutputs(args: any) {
+  private async declareOutputs(args: ToolArgs.DeclareOutputsArgs) {
     const { session_id, worker_id, output_keys } = args;
     
     const success = this.memoryStore.declareOutputs(session_id, worker_id, output_keys);
@@ -645,7 +678,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async awaitDependency(args: any) {
+  private async awaitDependency(args: ToolArgs.AwaitDependencyArgs) {
     const { session_id, dependency_key, timeout_minutes = 30 } = args;
     
     try {
@@ -671,7 +704,7 @@ class SharedMemoryMCPServer {
     }
   }
 
-  private async publishOutput(args: any) {
+  private async publishOutput(args: ToolArgs.PublishOutputArgs) {
     const { session_id, output_key, data } = args;
     
     const success = this.memoryStore.publishOutput(session_id, output_key, data);
@@ -692,7 +725,7 @@ class SharedMemoryMCPServer {
     };
   }
 
-  private async getSessionStats(args: any) {
+  private async getSessionStats(_args: {}) {
     const stats = this.memoryStore.getSessionStats();
 
     return {
